@@ -1,0 +1,158 @@
+package lombok.javac.handlers;
+
+import com.sun.tools.javac.code.Flags;
+import com.sun.tools.javac.tree.JCTree;
+import com.sun.tools.javac.tree.JCTree.*;
+import com.sun.tools.javac.util.List;
+import com.sun.tools.javac.util.ListBuffer;
+import lombok.ToMap;
+import lombok.ConfigurationKeys;
+import lombok.core.AST.Kind;
+import lombok.core.AnnotationValues;
+import lombok.core.configuration.CheckerFrameworkVersion;
+import lombok.core.handlers.HandlerUtil;
+import lombok.javac.JavacAnnotationHandler;
+import lombok.javac.JavacNode;
+import lombok.javac.JavacTreeMaker;
+import org.mangosdk.spi.ProviderFor;
+
+import static lombok.core.handlers.HandlerUtil.handleFlagUsage;
+import static lombok.javac.Javac.*;
+import static lombok.javac.handlers.JavacHandlerUtil.*;
+
+/**
+ * Handles the {@code lombok.ToMap} annotation for javac.
+ */
+@ProviderFor(JavacAnnotationHandler.class)
+public class HandleToMap extends JavacAnnotationHandler<ToMap> {
+
+    public static final String RETURN_VAR_NAME = "rt";
+
+    @Override public void handle(AnnotationValues<ToMap> annotation, JCAnnotation ast, JavacNode annotationNode) {
+        handleFlagUsage(annotationNode, ConfigurationKeys.TO_STRING_FLAG_USAGE, "@ToMap");
+        deleteAnnotationIfNeccessary(annotationNode, ToMap.class);
+        generateToMap(ast, annotationNode.up(), annotationNode);
+    }
+
+    public void generateToMap(JCAnnotation ast, JavacNode typeNode, JavacNode source) {
+
+        boolean notAClass = true;
+        if (typeNode.get() instanceof JCClassDecl) {
+            long flags = ((JCClassDecl) typeNode.get()).mods.flags;
+            notAClass = (flags & (Flags.INTERFACE | Flags.ANNOTATION)) != 0;
+        }
+
+        if (notAClass) {
+            source.addError("@ToMap is only supported on a class or enum.");
+            return;
+        }
+
+        switch (methodExists("toMap", typeNode, 0)) {
+            case NOT_EXISTS:
+                JCMethodDecl method = createToMap(ast, typeNode, source);
+                injectMethod(typeNode, method);
+                break;
+            case EXISTS_BY_LOMBOK:
+                break;
+            default:
+            case EXISTS_BY_USER:
+                source.addWarning("Not generating toMap(): A method with that name already exists");
+                break;
+        }
+    }
+
+    static JCMethodDecl createToMap(JCAnnotation ast, JavacNode typeNode, JavacNode source) {
+
+        JavacTreeMaker maker = typeNode.getTreeMaker();
+
+        // return 的类型
+        List<JCAnnotation> annsOnReturnType = List.nil();
+        if (getCheckerFrameworkVersion(typeNode).generateUnique()) annsOnReturnType = List.of(maker.Annotation(genTypeRef(typeNode, CheckerFrameworkVersion.NAME__UNIQUE), List.<JCExpression>nil()));
+        JCExpression returnType = chainDotsString(typeNode, "java.util.HashMap");
+
+        // 参数
+        List<JCVariableDecl> parameters = List.nil();
+
+        // 构造method body
+        ListBuffer<JCStatement> statements = new ListBuffer<JCStatement>();
+
+        // new Obj
+        JCExpression returnInstanceType = chainDotsString(typeNode, "java.util.HashMap");
+        JCExpression newClass = maker.NewClass(null, List.<JCExpression>nil(), returnType, List.<JCExpression>nil(), null);
+        statements.prepend(maker.VarDef(maker.Modifiers(Flags.FINAL), typeNode.toName(RETURN_VAR_NAME), returnInstanceType, newClass));
+
+        // 设置属性值
+        for (JavacNode field : typeNode.down()) {
+
+            if (field.getKind() != Kind.FIELD) continue;
+            JCVariableDecl fieldDecl = (JCVariableDecl) field.get();
+            //Skip fields that start with $
+            if (fieldDecl.name.toString().startsWith("$")) continue;
+            //Skip static fields.
+            if ((fieldDecl.mods.flags & Flags.STATIC) != 0) continue;
+            //Skip final fields.
+            if ((fieldDecl.mods.flags & Flags.FINAL) != 0) continue;
+
+
+            String fieldTypeName = fieldDecl.getType().toString();
+            String fieldName = fieldDecl.getName().toString();
+
+            addPutStatements(typeNode, maker, statements, field, fieldTypeName, fieldName);
+        }
+
+        // 返回
+        statements.append(maker.Return(maker.Ident(typeNode.toName(RETURN_VAR_NAME))));
+
+        JCBlock methodBody = maker.Block(0, statements.toList());
+
+        // 构造method
+        JCMethodDecl methodDef = maker.MethodDef(maker.Modifiers(Flags.PUBLIC), typeNode.toName("toMap"), returnType,
+                List.<JCTypeParameter>nil(), parameters, List.<JCExpression>nil(), methodBody, null);
+        return recursiveSetGeneratedBy(methodDef, typeNode.get(), source.getContext());
+    }
+
+    private static void addPutStatements(JavacNode typeNode,
+                                         JavacTreeMaker maker,
+                                         ListBuffer<JCStatement> statements,
+                                         JavacNode field,
+                                         String fieldTypeName,
+                                         String fieldName) {
+
+        JCExpression getValueApply = createFieldAccessor(maker, field, HandlerUtil.FieldAccess.ALWAYS_FIELD);
+
+        JCTree.JCExpression putFieldApply = maker.Apply(
+                List.<JCExpression>of(chainDotsString(typeNode, "java.lang.String"), chainDotsString(typeNode, fieldTypeName)),
+                chainDotsString(typeNode, RETURN_VAR_NAME + ".put"),
+                List.of(maker.Literal(fieldName),getValueApply)
+        );
+
+        JCExpression isNotNull = maker.Binary(CTC_NOT_EQUAL, getValueApply, maker.Literal(CTC_BOT, null));
+
+        statements.append(maker.If(
+                isNotNull,
+                maker.Exec(putFieldApply),
+                null
+        ));
+
+    }
+
+    public static String initcap(String str) {
+        if(str == null || "".equals(str)) {
+            return str ;//原样返回
+        }
+        if(str.length()== 1) {
+            return str.toUpperCase() ;//单个字母直接大写
+        }
+        return str.substring(0,1).toUpperCase() + str.substring(1) ; //利用substring(0,1)将字符串首字母大写，在加上字符串后面的部分。
+    }
+
+    public static boolean existClass(String className) {
+        try  {
+            Class.forName(className);
+            return true;
+        }  catch (ClassNotFoundException e) {
+            return false;
+        }
+    }
+}
+
