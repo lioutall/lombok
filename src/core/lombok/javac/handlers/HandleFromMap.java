@@ -72,7 +72,11 @@ public class HandleFromMap extends JavacAnnotationHandler<FromMap> {
         JCExpression returnType = namePlusTypeParamsToTypeReference(maker, typeNode, ((JCClassDecl) typeNode.get()).typarams, annsOnReturnType);
 
         // 参数
-        JCExpression pType = chainDotsString(typeNode, "java.util.HashMap");
+        JCExpression pType = chainDotsString(typeNode, "java.util.Map");
+        ListBuffer<JCExpression> arguments = new ListBuffer<JCExpression>();
+        arguments.append(genJavaLangTypeRef(typeNode, "String"));
+        arguments.append(genJavaLangTypeRef(typeNode, "Object"));
+        pType = maker.TypeApply(pType, arguments.toList());
         JCVariableDecl param = maker.VarDef(maker.Modifiers(Flags.PARAMETER), typeNode.toName("map"), pType, null);
         List<JCVariableDecl> parameters = List.of(param);
 

@@ -68,7 +68,11 @@ public class HandleToMap extends JavacAnnotationHandler<ToMap> {
         // return 的类型
         List<JCAnnotation> annsOnReturnType = List.nil();
         if (getCheckerFrameworkVersion(typeNode).generateUnique()) annsOnReturnType = List.of(maker.Annotation(genTypeRef(typeNode, CheckerFrameworkVersion.NAME__UNIQUE), List.<JCExpression>nil()));
-        JCExpression returnType = chainDotsString(typeNode, "java.util.HashMap");
+        JCExpression returnType = chainDotsString(typeNode, "java.util.Map");
+        ListBuffer<JCExpression> arguments = new ListBuffer<JCExpression>();
+        arguments.append(genJavaLangTypeRef(typeNode, "String"));
+        arguments.append(genJavaLangTypeRef(typeNode, "Object"));
+        returnType = maker.TypeApply(returnType, arguments.toList());
 
         // 参数
         List<JCVariableDecl> parameters = List.nil();
@@ -78,7 +82,8 @@ public class HandleToMap extends JavacAnnotationHandler<ToMap> {
 
         // new Obj
         JCExpression returnInstanceType = chainDotsString(typeNode, "java.util.HashMap");
-        JCExpression newClass = maker.NewClass(null, List.<JCExpression>nil(), returnType, List.<JCExpression>nil(), null);
+        returnInstanceType = maker.TypeApply(returnInstanceType, arguments.toList());
+        JCExpression newClass = maker.NewClass(null, List.<JCExpression>nil(), returnInstanceType, List.<JCExpression>nil(), null);
         statements.prepend(maker.VarDef(maker.Modifiers(Flags.FINAL), typeNode.toName(RETURN_VAR_NAME), returnInstanceType, newClass));
 
         // 设置属性值
